@@ -13,9 +13,9 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "/Users/beivyrivera/Desktop/ESTRUCTURA DE DATOS BR/SEMANA4/SEMANA4.csproj",
-      "projectName": "SEMANA4",
-      "projectPath": "/Users/beivyrivera/Desktop/ESTRUCTURA DE DATOS BR/SEMANA4/SEMANA4.csproj",
+      "projectUniqueName": "/Users/beivyrivera/Desktop/ESTRUCTURA DE DATOS BR/SEMANA4/SEMANA04.csproj",
+      "projectName": "SEMANA04",
+      "projectPath": "/Users/beivyrivera/Desktop/ESTRUCTURA DE DATOS BR/SEMANA4/SEMANA04.csproj",
       "packagesPath": "/Users/beivyrivera/.nuget/packages/",
       "outputPath": "/Users/beivyrivera/Desktop/ESTRUCTURA DE DATOS BR/SEMANA4/obj/",
       "projectStyle": "PackageReference",
