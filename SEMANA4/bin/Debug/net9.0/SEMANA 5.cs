@@ -140,6 +140,7 @@ class Program
         loteria.MostrarOrdenados();
     }
 }
+
 using System;
 using System.Collections.Generic;
 
