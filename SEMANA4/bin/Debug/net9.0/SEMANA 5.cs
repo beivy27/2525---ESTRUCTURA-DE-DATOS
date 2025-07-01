@@ -28,6 +28,7 @@ class Program
         curso.MostrarAsignaturas();
     }
 }
+
 using System;
 using System.Collections.Generic;
 
@@ -101,6 +102,7 @@ class Program
         curso.MostrarNotas();
     }
 }
+
 using System;
 using System.Collections.Generic;
 
