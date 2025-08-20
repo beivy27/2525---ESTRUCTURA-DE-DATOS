@@ -1,0 +1,142 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+
+class Program
+{
+    // ----- Parámetros de la práctica -----
+    const int TOTAL_CIUDADANOS = 500;
+    const int PFIZER_VACUNADOS = 75;
+    const int ASTRA_VACUNADOS = 75;
+    const int SEED = 20250818; // semilla para reproducibilidad
+
+    static void Main()
+    {
+        // 1) Universo de ciudadanos (U)
+        var ciudadanos = GenerarCiudadanos(TOTAL_CIUDADANOS);                   // U
+
+        // 2) Conjuntos de vacunados por marca (P y A)
+        var (pfizer, astra) = GenerarVacunados(ciudadanos, PFIZER_VACUNADOS, ASTRA_VACUNADOS, SEED); // P, A
+
+        // 3) Operaciones de teoría de conjuntos
+        var union = Union(pfizer, astra);                           // P ∪ A
+        var noVacunados = Diferencia(ciudadanos, union);            // U − (P ∪ A)
+        var ambasDosis = Interseccion(pfizer, astra);               // P ∩ A
+        var soloPfizer = Diferencia(pfizer, astra);                 // P − A
+        var soloAstra = Diferencia(astra, pfizer);                  // A − P
+
+        // 4) Salida por consola
+        Console.WriteLine("=== Resultados de Vacunación (conjuntos) ===\n");
+        ImprimirResumen("Universo (U)", ciudadanos);
+        ImprimirResumen("Pfizer (P)", pfizer);
+        ImprimirResumen("AstraZeneca (A)", astra);
+        ImprimirResumen("No vacunados = U − (P ∪ A)", noVacunados);
+        ImprimirResumen("Ambas dosis (P ∩ A)", ambasDosis);
+        ImprimirResumen("Solo Pfizer (P − A)", soloPfizer);
+        ImprimirResumen("Solo AstraZeneca (A − P)", soloAstra);
+
+        // 5) (OPCIONAL) Exportar reportes a archivos para luego convertir a PDF
+        // Descomenta si deseas los archivos en la carpeta de ejecución.
+        /*
+        ExportarCsv("no_vacunados.csv", noVacunados);
+        ExportarCsv("ambas_dosis.csv", ambasDosis);
+        ExportarCsv("solo_pfizer.csv", soloPfizer);
+        ExportarCsv("solo_astrazeneca.csv", soloAstra);
+
+        ExportarMarkdown("reporte.md", ciudadanos.Count, pfizer.Count, astra.Count,
+            noVacunados.Count, ambasDosis.Count, soloPfizer.Count, soloAstra.Count);
+        Console.WriteLine("\nArchivos exportados: reporte.md y CSVs. Puedes 'Imprimir como PDF'.");
+        */
+    }
+
+    // -------------------- Generación de datos --------------------
+    static HashSet<string> GenerarCiudadanos(int total)
+    {
+        var set = new HashSet<string>();
+        for (int i = 1; i <= total; i++)
+            set.Add($"Ciudadano {i}");
+        return set;
+    }
+
+    static (HashSet<string> pfizer, HashSet<string> astra)
+        GenerarVacunados(HashSet<string> universo, int nPfizer, int nAstra, int seed)
+    {
+        var rng = new Random(seed);
+        var lista = universo.ToList();
+
+        var pfizer = TomarAleatorios(lista, nPfizer, rng);
+        var astra = TomarAleatorios(lista, nAstra, rng);
+
+        return (pfizer, astra);
+    }
+
+    static HashSet<string> TomarAleatorios(List<string> universo, int n, Random rng)
+    {
+        // Selección sin reemplazo O(n) sobre lista
+        var indices = new HashSet<int>();
+        while (indices.Count < n)
+            indices.Add(rng.Next(0, universo.Count));
+
+        var salida = new HashSet<string>();
+        foreach (var idx in indices) salida.Add(universo[idx]);
+        return salida;
+    }
+
+    // -------------------- Operaciones de conjuntos --------------------
+    static HashSet<T> Union<T>(HashSet<T> a, HashSet<T> b)
+    {
+        var r = new HashSet<T>(a);
+        r.UnionWith(b);               // O(|a| + |b|)
+        return r;
+    }
+
+    static HashSet<T> Interseccion<T>(HashSet<T> a, HashSet<T> b)
+    {
+        var r = new HashSet<T>(a);
+        r.IntersectWith(b);           // O(min(|a|,|b|)) promedio hash
+        return r;
+    }
+
+    static HashSet<T> Diferencia<T>(HashSet<T> a, HashSet<T> b)
+    {
+        var r = new HashSet<T>(a);
+        r.ExceptWith(b);              // O(|a|) promedio hash
+        return r;
+    }
+
+    // -------------------- Utilidades de salida --------------------
+    static void ImprimirResumen(string titulo, HashSet<string> set, int maxEjemplos = 10)
+    {
+        Console.WriteLine($"[{titulo}] Total: {set.Count}");
+        Console.WriteLine("Ejemplos: " + string.Join(", ", set.Take(maxEjemplos)) + (set.Count > maxEjemplos ? "..." : ""));
+        Console.WriteLine();
+    }
+
+    static void ExportarCsv(string filename, HashSet<string> set)
+    {
+        File.WriteAllLines(filename, new[] { "ciudadano" }.Concat(set));
+    }
+
+    static void ExportarMarkdown(string filename,
+        int totalU, int totalP, int totalA, int totNo, int totAmbas, int totSoloP, int totSoloA)
+    {
+        var lines = new List<string>
+        {
+            "# Reporte de Vacunación (Conjuntos)",
+            "",
+            "| Conjunto | Descripción | Total |",
+            "|---|---|---:|",
+            $"| U | Universo de ciudadanos | {totalU} |",
+            $"| P | Vacunados con Pfizer | {totalP} |",
+            $"| A | Vacunados con AstraZeneca | {totalA} |",
+            $"| U − (P ∪ A) | No vacunados | {totNo} |",
+            $"| P ∩ A | Ambas dosis (ambas marcas) | {totAmbas} |",
+            $"| P − A | Solo Pfizer | {totSoloP} |",
+            $"| A − P | Solo AstraZeneca | {totSoloA} |",
+            "",
+            "_Generado con .NET y HashSet<T> (teoría de conjuntos)._"
+        };
+        File.WriteAllLines(filename, lines);
+    }
+}
