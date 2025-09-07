@@ -1,198 +1,567 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text;
-using System.Text.RegularExpressions;
 
-class Program
+namespace TorneoFutbolApp
 {
-    // Diccionario base: español -> inglés (min. 10; se incluyen todas las sugeridas)
-    static Dictionary<string, string> esEn = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    // === MODELOS (POO) ===
+    public sealed class Jugador
     {
-        ["tiempo"] = "time",
-        ["persona"] = "person",
-        ["año"] = "year",
-        ["camino"] = "way",
-        ["forma"] = "way",
-        ["día"] = "day",
-        ["cosa"] = "thing",
-        ["hombre"] = "man",
-        ["mundo"] = "world",
-        ["vida"] = "life",
-        ["mano"] = "hand",
-        ["parte"] = "part",
-        ["niño"] = "child",
-        ["niña"] = "child",
-        ["ojo"] = "eye",
-        ["mujer"] = "woman",
-        ["lugar"] = "place",
-        ["trabajo"] = "work",
-        ["semana"] = "week",
-        ["caso"] = "case",
-        ["punto"] = "point",
-        ["tema"] = "point",
-        ["gobierno"] = "government",
-        ["empresa"] = "company",
-        ["compañía"] = "company"
-    };
+        public string Id { get; private set; }
+        public string Nombre { get; private set; }
+        public int Edad { get; private set; }
+        public string Posicion { get; private set; } // ARQ/DEF/VOL/DEL
+        public int Goles { get; private set; }
 
-    static void Main()
-    {
-        Console.OutputEncoding = Encoding.UTF8;
-        Console.InputEncoding = Encoding.UTF8;
-
-        while (true)
+        public Jugador(string id, string nombre, int edad, string posicion, int goles = 0)
         {
-            ImprimirMenu();
+            if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException("ID inválido.");
+            if (string.IsNullOrWhiteSpace(nombre)) throw new ArgumentException("Nombre inválido.");
+            if (edad < 10 || edad > 60) throw new ArgumentOutOfRangeException("edad", "Edad fuera de rango.");
+            if (string.IsNullOrWhiteSpace(posicion)) throw new ArgumentException("Posición inválida.");
 
-            Console.Write("Seleccione una opción: ");
-            string opcion = Console.ReadLine()?.Trim() ?? "";
+            Id = id.Trim();
+            Nombre = nombre.Trim();
+            Edad = edad;
+            Posicion = posicion.Trim().ToUpperInvariant();
+            Goles = Math.Max(0, goles);
+        }
 
-            switch (opcion)
+        public void Actualizar(string nuevoNombre, int? nuevaEdad, string nuevaPosicion)
+        {
+            if (!string.IsNullOrWhiteSpace(nuevoNombre)) Nombre = nuevoNombre.Trim();
+            if (nuevaEdad.HasValue && nuevaEdad.Value >= 10 && nuevaEdad.Value <= 60) Edad = nuevaEdad.Value;
+            if (!string.IsNullOrWhiteSpace(nuevaPosicion)) Posicion = nuevaPosicion.Trim().ToUpperInvariant();
+        }
+
+        public void SumarGoles(int delta)
+        {
+            int nuevo = Goles + delta;
+            Goles = nuevo < 0 ? 0 : nuevo;
+        }
+
+        public override string ToString()
+        {
+            return string.Format("{0,-8} | {1,-20} | Edad:{2,2} | Pos:{3,-3} | Goles:{4,2}",
+                Id, Nombre, Edad, Posicion, Goles);
+        }
+    }
+
+    public sealed class Equipo
+    {
+        public string Nombre { get; private set; }
+        public string Categoria { get; private set; } // Libre/Sub-18/Femenino
+        public HashSet<string> JugadorIds { get; private set; }
+
+        public Equipo(string nombre, string categoria)
+        {
+            if (string.IsNullOrWhiteSpace(nombre)) throw new ArgumentException("Nombre de equipo inválido.");
+            if (string.IsNullOrWhiteSpace(categoria)) throw new ArgumentException("Categoría inválida.");
+            Nombre = nombre.Trim();
+            Categoria = categoria.Trim();
+            JugadorIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        public void CambiarCategoria(string nuevaCategoria)
+        {
+            if (!string.IsNullOrWhiteSpace(nuevaCategoria))
+                Categoria = nuevaCategoria.Trim();
+        }
+
+        public override string ToString()
+        {
+            return string.Format("{0,-15} | Cat:{1,-10} | Nómina:{2,2}", Nombre, Categoria, JugadorIds.Count);
+        }
+    }
+
+    // === LÓGICA DE NEGOCIO (Conjuntos y Mapas) ===
+    public sealed class Torneo
+    {
+        public Dictionary<string, Jugador> Jugadores { get; private set; }
+        public Dictionary<string, Equipo> Equipos { get; private set; }
+
+        public Torneo()
+        {
+            Jugadores = new Dictionary<string, Jugador>(StringComparer.OrdinalIgnoreCase);
+            Equipos = new Dictionary<string, Equipo>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        // --- Jugadores ---
+        public bool AgregarJugador(Jugador j)
+        {
+            if (j == null || Jugadores.ContainsKey(j.Id)) return false;
+            Jugadores[j.Id] = j;
+            return true;
+        }
+
+        public Jugador ObtenerJugador(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return null;
+            Jugador j;
+            return Jugadores.TryGetValue(id, out j) ? j : null;
+        }
+
+        public IEnumerable<Jugador> BuscarJugadorPorNombre(string nombre)
+        {
+            string q = (nombre ?? "").Trim().ToLowerInvariant();
+            return Jugadores.Values
+                .Where(j => j.Nombre.ToLowerInvariant().Contains(q))
+                .OrderBy(j => j.Nombre)
+                .ThenBy(j => j.Id);
+        }
+
+        public bool ActualizarJugador(string id, string nuevoNombre, int? nuevaEdad, string nuevaPos)
+        {
+            var j = ObtenerJugador(id);
+            if (j == null) return false;
+            j.Actualizar(nuevoNombre, nuevaEdad, nuevaPos);
+            return true;
+        }
+
+        public bool EliminarJugador(string id)
+        {
+            if (!Jugadores.ContainsKey(id)) return false;
+            foreach (var e in Equipos.Values) e.JugadorIds.Remove(id); // limpiar pertenencias
+            return Jugadores.Remove(id);
+        }
+
+        public bool SumarGoles(string id, int delta)
+        {
+            var j = ObtenerJugador(id);
+            if (j == null) return false;
+            j.SumarGoles(delta);
+            return true;
+        }
+
+        // --- Equipos ---
+        public bool AgregarEquipo(Equipo e)
+        {
+            if (e == null || Equipos.ContainsKey(e.Nombre)) return false;
+            Equipos[e.Nombre] = e;
+            return true;
+        }
+
+        public Equipo ObtenerEquipo(string nombre)
+        {
+            if (string.IsNullOrWhiteSpace(nombre)) return null;
+            Equipo e;
+            return Equipos.TryGetValue(nombre, out e) ? e : null;
+        }
+
+        public bool EliminarEquipo(string nombre)
+        {
+            return Equipos.Remove(nombre);
+        }
+
+        public IEnumerable<Equipo> EquiposPorCategoria(string categoria)
+        {
+            string c = (categoria ?? "").Trim();
+            return Equipos.Values
+                          .Where(e => e.Categoria.Equals(c, StringComparison.OrdinalIgnoreCase))
+                          .OrderBy(e => e.Nombre);
+        }
+
+        // --- Relaciones (Conjuntos) ---
+        public bool AsignarJugadorAEquipo(string idJugador, string nombreEquipo)
+        {
+            var j = ObtenerJugador(idJugador);
+            var e = ObtenerEquipo(nombreEquipo);
+            if (j == null || e == null) return false;
+            int before = e.JugadorIds.Count;
+            e.JugadorIds.Add(j.Id); // HashSet garantiza unicidad
+            return e.JugadorIds.Count > before;
+        }
+
+        // --- Reportería ---
+        public IEnumerable<Jugador> JugadoresOrdenados()
+        {
+            return Jugadores.Values.OrderBy(j => j.Nombre).ThenBy(j => j.Id);
+        }
+
+        public IEnumerable<Equipo> EquiposOrdenados()
+        {
+            return Equipos.Values.OrderBy(e => e.Nombre);
+        }
+
+        public IEnumerable<Jugador> NominaDe(string nombreEquipo)
+        {
+            var e = ObtenerEquipo(nombreEquipo);
+            if (e == null) return new List<Jugador>();
+            var lista = new List<Jugador>();
+            foreach (var id in e.JugadorIds)
             {
-                case "1":
-                    TraducirFrase();
-                    break;
-                case "2":
-                    AgregarPalabra();
-                    break;
-                case "0":
-                    Console.WriteLine("¡Hasta luego!");
-                    return;
-                default:
-                    Console.WriteLine("Opción no válida. Intente de nuevo.\n");
-                    break;
+                var j = ObtenerJugador(id);
+                if (j != null) lista.Add(j);
+            }
+            return lista.OrderBy(x => x.Nombre);
+        }
+
+        public IEnumerable<Jugador> Goleadores(int topN)
+        {
+            if (topN < 1) topN = 1;
+            return Jugadores.Values
+                            .OrderByDescending(j => j.Goles)
+                            .ThenBy(j => j.Nombre)
+                            .Take(topN);
+        }
+
+        public Dictionary<string, int> TamanoNominas()
+        {
+            var dict = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in Equipos.OrderBy(k => k.Key))
+                dict[kv.Key] = kv.Value.JugadorIds.Count;
+            return dict;
+        }
+    }
+
+    // === Reporte y Benchmark ===
+    public static class Reporte
+    {
+        public const string AGENTE_IA = "ChatGPT (GPT-5 Thinking)";
+        public const int PORCENTAJE_IA = 20;
+
+        public static void GuardarReporteTxt(Torneo t, string ruta = "reporte_torneo.txt")
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("===== REPORTE DEL TORNEO (Conjuntos y Mapas) =====");
+            sb.AppendLine("Fecha: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            sb.AppendLine("Agente de IA: " + AGENTE_IA + " | Uso declarado: " + PORCENTAJE_IA + "%");
+            sb.AppendLine();
+
+            sb.AppendLine("== Equipos ==");
+            foreach (var e in t.EquiposOrdenados()) sb.AppendLine(e.ToString());
+            sb.AppendLine();
+
+            sb.AppendLine("== Jugadores ==");
+            foreach (var j in t.JugadoresOrdenados()) sb.AppendLine(j.ToString());
+            sb.AppendLine();
+
+            sb.AppendLine("== Nóminas por equipo ==");
+            foreach (var e in t.EquiposOrdenados())
+            {
+                sb.AppendLine("[ " + e.Nombre + " ]");
+                var nom = t.NominaDe(e.Nombre).ToList();
+                if (nom.Count == 0) sb.AppendLine("  (sin jugadores)");
+                foreach (var j in nom) sb.AppendLine("  - " + j.ToString());
+                sb.AppendLine();
+            }
+
+            sb.AppendLine("== Goleadores (Top 10) ==");
+            int i = 1;
+            foreach (var j in t.Goleadores(10))
+                sb.AppendLine(string.Format("{0,2}. {1,-20} | Goles:{2,2} | ID:{3}", i++, j.Nombre, j.Goles, j.Id));
+
+            File.WriteAllText(ruta, sb.ToString(), new UTF8Encoding(false));
+            Console.WriteLine("✔ Reporte TXT guardado: " + Path.GetFullPath(ruta));
+        }
+    }
+
+    public static class Benchmark
+    {
+        public static void Ejecutar(string csv = "tiempos_benchmark.csv")
+        {
+            int[] tamaños = new int[] { 1000, 5000, 10000 };
+            using (var sw = new StreamWriter(csv, false, new UTF8Encoding(false)))
+            {
+                sw.WriteLine("n_registros,insert_ms,assign_ms,search_ms,delete_ms,search_hits,deleted");
+
+                foreach (int n in tamaños)
+                {
+                    var rnd = new Random(123);
+                    var t = new Torneo();
+
+                    // Datos
+                    var ids = new List<string>(n);
+                    var nombres = new List<string>(n);
+                    for (int i = 0; i < n; i++)
+                    {
+                        ids.Add("P" + (i + 1).ToString().PadLeft(6, '0'));
+                        nombres.Add("Jugador " + (i + 1).ToString());
+                    }
+                    string[] posiciones = new string[] { "ARQ", "DEF", "VOL", "DEL" };
+
+                    // Insertar jugadores
+                    var w = Stopwatch.StartNew();
+                    for (int i = 0; i < n; i++)
+                    {
+                        var j = new Jugador(ids[i], nombres[i], 18 + (i % 15), posiciones[i % posiciones.Length]);
+                        t.AgregarJugador(j);
+                    }
+                    w.Stop();
+                    double insertMs = w.Elapsed.TotalMilliseconds;
+
+                    // Equipo para asignación
+                    t.AgregarEquipo(new Equipo("BenchTeam", "Libre"));
+
+                    // Asignar mitad
+                    w.Restart();
+                    for (int i = 0; i < n; i += 2)
+                        t.AsignarJugadorAEquipo(ids[i], "BenchTeam");
+                    w.Stop();
+                    double assignMs = w.Elapsed.TotalMilliseconds;
+
+                    // Búsquedas
+                    int k = Math.Min(1000, n);
+                    var sample = ids.OrderBy(x => rnd.Next()).Take(k).ToList();
+                    int hits = 0;
+                    w.Restart();
+                    foreach (var pid in sample)
+                        if (t.ObtenerJugador(pid) != null) hits++;
+                    w.Stop();
+                    double searchMs = w.Elapsed.TotalMilliseconds;
+
+                    // Eliminaciones
+                    var del = ids.OrderBy(x => rnd.Next()).Take(k).ToList();
+                    int deleted = 0;
+                    w.Restart();
+                    foreach (var pid in del)
+                        if (t.EliminarJugador(pid)) deleted++;
+                    w.Stop();
+                    double deleteMs = w.Elapsed.TotalMilliseconds;
+
+                    sw.WriteLine(string.Format(
+                        CultureInfo.InvariantCulture,
+                        "{0},{1:F2},{2:F2},{3:F2},{4:F2},{5},{6}",
+                        n, insertMs, assignMs, searchMs, deleteMs, hits, deleted));
+                }
+            }
+            Console.WriteLine("✔ Benchmark CSV guardado: " + Path.GetFullPath(csv));
+        }
+    }
+
+    // === Utilidades de consola ===
+    public static class Ui
+    {
+        public static string LeerNoVacio(string etiqueta)
+        {
+            while (true)
+            {
+                Console.Write(etiqueta + ": ");
+                string s = (Console.ReadLine() ?? "").Trim();
+                if (!string.IsNullOrWhiteSpace(s)) return s;
+                Console.WriteLine("Ingrese un valor no vacío.");
             }
         }
-    }
 
-    static void ImprimirMenu()
-    {
-        Console.WriteLine("============== MENÚ ==============");
-        Console.WriteLine("1. Traducir una frase (ES -> EN)");
-        Console.WriteLine("2. Agregar palabras al diccionario");
-        Console.WriteLine("0. Salir");
-        Console.WriteLine("==================================");
-    }
-
-    static void TraducirFrase()
-    {
-        Console.Write("Ingrese una frase en español: ");
-        string frase = Console.ReadLine() ?? "";
-
-        // Tokeniza preservando signos de puntuación
-        var tokens = Tokenizar(frase);
-
-        for (int i = 0; i < tokens.Count; i++)
+        public static int LeerEntero(string etiqueta, int min, int max)
         {
-            if (!tokens[i].EsPalabra) continue;
-
-            string palabraOriginal = tokens[i].Texto;
-            string palabraLimpia = QuitarDiacriticos(palabraOriginal.ToLower());
-
-            // Intentamos dos formas de búsqueda: con y sin diacríticos
-            string traduccion = null;
-
-            if (esEn.TryGetValue(palabraOriginal.ToLower(), out var t1))
-                traduccion = t1;
-            else if (esEn.TryGetValue(palabraLimpia, out var t2))
-                traduccion = t2;
-            else
-                traduccion = null;
-
-            if (traduccion != null)
+            while (true)
             {
-                traduccion = AjustarMayusculas(palabraOriginal, traduccion);
-                tokens[i] = new Token(true, traduccion);
+                Console.Write(etiqueta + ": ");
+                string s = Console.ReadLine();
+                int v;
+                if (int.TryParse(s, out v) && v >= min && v <= max) return v;
+                Console.WriteLine("Ingrese un entero válido en rango [" + min + ".." + max + "].");
             }
         }
 
-        string resultado = string.Concat(tokens.Select(t => t.Texto));
-        Console.WriteLine("Traducción: " + resultado + "\n");
-    }
-
-    static void AgregarPalabra()
-    {
-        Console.Write("Palabra en español: ");
-        string es = (Console.ReadLine() ?? "").Trim();
-
-        if (string.IsNullOrWhiteSpace(es))
+        public static bool Confirmado(string prompt = "¿Confirmar? (s/n): ")
         {
-            Console.WriteLine("La palabra en español no puede estar vacía.\n");
-            return;
+            Console.Write(prompt);
+            string r = (Console.ReadLine() ?? "").Trim().ToLowerInvariant();
+            return r == "s" || r == "si" || r == "sí" || r == "y";
         }
 
-        Console.Write("Traducción al inglés: ");
-        string en = (Console.ReadLine() ?? "").Trim();
-
-        if (string.IsNullOrWhiteSpace(en))
+        public static string Titulo(string s)
         {
-            Console.WriteLine("La traducción al inglés no puede estar vacía.\n");
-            return;
-        }
-
-        // Guardamos dos claves: con y sin diacríticos (para facilitar los matches)
-        string clave1 = es.ToLower();
-        string clave2 = QuitarDiacriticos(clave1);
-
-        esEn[clave1] = en;
-        esEn[clave2] = en;
-
-        Console.WriteLine($"Agregado/actualizado: \"{es}\" -> \"{en}\".\n");
-    }
-
-    // -------- utilidades --------
-    static string QuitarDiacriticos(string texto)
-    {
-        var norm = texto.Normalize(NormalizationForm.FormD);
-        var sb = new StringBuilder();
-
-        foreach (var c in norm)
-        {
-            var uc = CharUnicodeInfo.GetUnicodeCategory(c);
-            if (uc != UnicodeCategory.NonSpacingMark)
-                sb.Append(c);
-        }
-        return sb.ToString().Normalize(NormalizationForm.FormC);
-    }
-
-    static string AjustarMayusculas(string original, string traducida)
-    {
-        // Si original está TODO en mayúsculas
-        if (original.ToUpper() == original) return traducida.ToUpper();
-
-        // Si original tiene mayúscula inicial
-        if (char.IsLetter(original.FirstOrDefault()) && char.IsUpper(original[0]))
-            return char.ToUpper(traducida[0]) + traducida.Substring(1);
-
-        return traducida;
-    }
-
-    // Token que distingue palabras de signos/espacios para recomponer la frase
-    struct Token
-    {
-        public bool EsPalabra;
-        public string Texto;
-        public Token(bool esPalabra, string texto)
-        {
-            EsPalabra = esPalabra;
-            Texto = texto;
+            s = (s ?? "").Trim();
+            TextInfo ti = CultureInfo.CurrentCulture.TextInfo;
+            return ti.ToTitleCase(s.ToLower());
         }
     }
 
-    static List<Token> Tokenizar(string s)
+    // === Programa principal / Menú ===
+    public static class Program
     {
-        // Separa palabras (letras) y no-palabras (espacios, signos)
-        var lista = new List<Token>();
-        var regex = new Regex(@"\p{L}+|[^\p{L}]+", RegexOptions.Multiline);
-
-        foreach (Match m in regex.Matches(s))
+        public static void Main()
         {
-            string t = m.Value;
-            bool esPalabra = Regex.IsMatch(t, @"^\p{L}+$");
-            lista.Add(new Token(esPalabra, t));
+            Console.OutputEncoding = Encoding.UTF8;
+
+            var torneo = new Torneo();
+            CargarDatosDemo(torneo);
+
+            while (true)
+            {
+                Console.WriteLine("\n=== TORNEO DE FÚTBOL — MENÚ ===");
+                Console.WriteLine("1) Agregar jugador");
+                Console.WriteLine("2) Agregar equipo");
+                Console.WriteLine("3) Asignar jugador a equipo");
+                Console.WriteLine("4) Editar jugador (nombre/edad/posición)");
+                Console.WriteLine("5) Registrar goles (±)");
+                Console.WriteLine("6) Visualizar jugadores");
+                Console.WriteLine("7) Visualizar equipos");
+                Console.WriteLine("8) Visualizar nómina por equipo");
+                Console.WriteLine("9) Buscar jugador por nombre");
+                Console.WriteLine("10) Buscar jugador por ID");
+                Console.WriteLine("11) Tabla de goleadores (Top N)");
+                Console.WriteLine("12) Equipos por categoría");
+                Console.WriteLine("13) Guardar reporte TXT");
+                Console.WriteLine("14) Ejecutar benchmark (CSV)");
+                Console.WriteLine("0) Salir");
+                Console.Write("Seleccione opción: ");
+
+                string op = (Console.ReadLine() ?? "").Trim();
+                Console.WriteLine();
+
+                try
+                {
+                    if (op == "1") AgregarJugadorUI(torneo);
+                    else if (op == "2") AgregarEquipoUI(torneo);
+                    else if (op == "3") AsignarJugadorUI(torneo);
+                    else if (op == "4") EditarJugadorUI(torneo);
+                    else if (op == "5") RegistrarGolesUI(torneo);
+                    else if (op == "6") VisualizarJugadoresUI(torneo);
+                    else if (op == "7") VisualizarEquiposUI(torneo);
+                    else if (op == "8") VisualizarNominaUI(torneo);
+                    else if (op == "9") BuscarJugadorNombreUI(torneo);
+                    else if (op == "10") BuscarJugadorIdUI(torneo);
+                    else if (op == "11") GoleadoresUI(torneo);
+                    else if (op == "12") EquiposPorCategoriaUI(torneo);
+                    else if (op == "13") Reporte.GuardarReporteTxt(torneo);
+                    else if (op == "14") Benchmark.Ejecutar();
+                    else if (op == "0") return;
+                    else Console.WriteLine("Opción no válida.");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("⚠ Error: " + ex.Message);
+                }
+            }
         }
-        return lista;
+
+        private static void CargarDatosDemo(Torneo t)
+        {
+            t.AgregarEquipo(new Equipo("Jaguares", "Libre"));
+            t.AgregarEquipo(new Equipo("Cóndores", "Sub-18"));
+            t.AgregarEquipo(new Equipo("Amazonas", "Femenino"));
+
+            t.AgregarJugador(new Jugador("P001", "Ana Vera", 22, "DEL", 3));
+            t.AgregarJugador(new Jugador("P002", "Luis Mera", 17, "VOL", 0));
+            t.AgregarJugador(new Jugador("P003", "Carla Núñez", 20, "DEF", 0));
+            t.AgregarJugador(new Jugador("P004", "Marco Paz", 25, "DEL", 1));
+            t.AgregarJugador(new Jugador("P005", "Nina Yupa", 18, "ARQ", 0));
+            t.AgregarJugador(new Jugador("P006", "Diego Díaz", 17, "DEL", 2));
+
+            t.AsignarJugadorAEquipo("P001", "Jaguares");
+            t.AsignarJugadorAEquipo("P004", "Jaguares");
+            t.AsignarJugadorAEquipo("P002", "Cóndores");
+            t.AsignarJugadorAEquipo("P006", "Cóndores");
+            t.AsignarJugadorAEquipo("P003", "Amazonas");
+            t.AsignarJugadorAEquipo("P005", "Amazonas");
+        }
+
+        // === UI Handlers ===
+        private static void AgregarJugadorUI(Torneo t)
+        {
+            string id = Ui.LeerNoVacio("ID del jugador");
+            string nombre = Ui.Titulo(Ui.LeerNoVacio("Nombre"));
+            int edad = Ui.LeerEntero("Edad (10-60)", 10, 60);
+            string pos = Ui.LeerNoVacio("Posición (ARQ/DEF/VOL/DEL)").ToUpperInvariant();
+
+            bool ok = t.AgregarJugador(new Jugador(id, nombre, edad, pos));
+            Console.WriteLine(ok ? "✔ Jugador agregado." : "✖ No se pudo agregar (ID duplicado o datos inválidos).");
+        }
+
+        private static void AgregarEquipoUI(Torneo t)
+        {
+            string nombre = Ui.Titulo(Ui.LeerNoVacio("Nombre del equipo"));
+            string cat = Ui.Titulo(Ui.LeerNoVacio("Categoría (Libre/Sub-18/Femenino/...)"));
+            bool ok = t.AgregarEquipo(new Equipo(nombre, cat));
+            Console.WriteLine(ok ? "✔ Equipo agregado." : "✖ No se pudo agregar (nombre duplicado o datos inválidos).");
+        }
+
+        private static void AsignarJugadorUI(Torneo t)
+        {
+            string id = Ui.LeerNoVacio("ID del jugador");
+            string eq = Ui.LeerNoVacio("Nombre del equipo");
+            bool ok = t.AsignarJugadorAEquipo(id, eq);
+            Console.WriteLine(ok ? "✔ Jugador asignado." : "✖ Verifique ID y equipo.");
+        }
+
+        private static void EditarJugadorUI(Torneo t)
+        {
+            string id = Ui.LeerNoVacio("ID del jugador");
+            string nombre = Ui.LeerNoVacio("Nuevo nombre");
+            int edad = Ui.LeerEntero("Nueva edad (10-60)", 10, 60);
+            string pos = Ui.LeerNoVacio("Nueva posición (ARQ/DEF/VOL/DEL)");
+            bool ok = t.ActualizarJugador(id, Ui.Titulo(nombre), edad, pos);
+            Console.WriteLine(ok ? "✔ Jugador actualizado." : "✖ Jugador no encontrado.");
+        }
+
+        private static void RegistrarGolesUI(Torneo t)
+        {
+            string id = Ui.LeerNoVacio("ID del jugador");
+            int delta = Ui.LeerEntero("Goles a sumar (puede ser negativo)", -100, 100);
+            bool ok = t.SumarGoles(id, delta);
+            Console.WriteLine(ok ? "✔ Goles actualizados." : "✖ Jugador no encontrado.");
+        }
+
+        private static void VisualizarJugadoresUI(Torneo t)
+        {
+            Console.WriteLine("=== JUGADORES ===");
+            foreach (var j in t.JugadoresOrdenados()) Console.WriteLine(j);
+            Console.WriteLine("Total: " + t.Jugadores.Count);
+            Console.WriteLine("— Resumen de nóminas —");
+            foreach (var kv in t.TamanoNominas()) Console.WriteLine(string.Format("{0,-15} => {1,2} jugador(es)", kv.Key, kv.Value));
+        }
+
+        private static void VisualizarEquiposUI(Torneo t)
+        {
+            Console.WriteLine("=== EQUIPOS ===");
+            foreach (var e in t.EquiposOrdenados()) Console.WriteLine(e);
+            Console.WriteLine("Total equipos: " + t.Equipos.Count);
+            Console.WriteLine("— Tamaño de nóminas —");
+            foreach (var kv in t.TamanoNominas()) Console.WriteLine(string.Format("{0,-15} => {1,2} jugador(es)", kv.Key, kv.Value));
+        }
+
+        private static void VisualizarNominaUI(Torneo t)
+        {
+            string eq = Ui.LeerNoVacio("Nombre del equipo");
+            var nom = t.NominaDe(eq).ToList();
+            if (nom.Count == 0) { Console.WriteLine("Sin jugadores o equipo inexistente."); return; }
+            Console.WriteLine("=== NÓMINA: " + Ui.Titulo(eq) + " ===");
+            foreach (var j in nom) Console.WriteLine(j);
+            Console.WriteLine("Total: " + nom.Count);
+        }
+
+        private static void BuscarJugadorNombreUI(Torneo t)
+        {
+            string q = Ui.LeerNoVacio("Nombre (o parte)");
+            var res = t.BuscarJugadorPorNombre(q).ToList();
+            if (res.Count == 0) { Console.WriteLine("Sin coincidencias."); return; }
+            Console.WriteLine("=== COINCIDENCIAS ===");
+            foreach (var j in res) Console.WriteLine(j);
+            Console.WriteLine("Total: " + res.Count);
+        }
+
+        private static void BuscarJugadorIdUI(Torneo t)
+        {
+            string id = Ui.LeerNoVacio("ID del jugador");
+            var j = t.ObtenerJugador(id);
+            Console.WriteLine(j == null ? "No encontrado." : j.ToString());
+        }
+
+        private static void GoleadoresUI(Torneo t)
+        {
+            int top = Ui.LeerEntero("¿Cuántos goleadores mostrar? (Top N)", 1, 1000);
+            Console.WriteLine("=== GOLEADORES (Top " + top + ") ===");
+            int i = 1;
+            foreach (var j in t.Goleadores(top))
+                Console.WriteLine(string.Format("{0,2}. {1,-20} | Goles:{2,2} | ID:{3}", i++, j.Nombre, j.Goles, j.Id));
+        }
+
+        private static void EquiposPorCategoriaUI(Torneo t)
+        {
+            string cat = Ui.LeerNoVacio("Categoría a consultar");
+            var res = t.EquiposPorCategoria(cat).ToList();
+            if (res.Count == 0) { Console.WriteLine("Sin equipos en esa categoría."); return; }
+            Console.WriteLine("=== EQUIPOS — CATEGORÍA: " + Ui.Titulo(cat) + " ===");
+            foreach (var e in res) Console.WriteLine(e);
+            Console.WriteLine("Total: " + res.Count);
+        }
     }
 }
